@@ -31,8 +31,7 @@ function run_cwltool() {
 }
 
 function run_nextflow() {
-  local container="nextflow/nextflow:23.10.0"
-  local cmd_txt="nextflow run ${wf_url} ${wf_engine_params} -params-file ${wf_params} -profile docker -work-dir ${exe_dir} 1>${stdout} 2>${stderr}"
+  local cmd_txt="NXF_HOME=${nxf_home} nextflow run ${wf_url} ${wf_engine_params} -params-file ${wf_params} -profile docker -work-dir ${exe_dir} 1>${stdout} 2>${stderr}"
   find ${exe_dir} -type f -exec chmod 777 {} \;
   echo ${cmd_txt} >${cmd}
   eval ${cmd_txt} || executor_error
@@ -199,6 +198,8 @@ function clean_rundir() {
 # If you are not familiar with sapporo, please don't edit below.
 
 run_dir=$1
+
+nxf_home=$1/../../.nextflow
 
 # Run dir structure
 run_request="${run_dir}/run_request.json"
