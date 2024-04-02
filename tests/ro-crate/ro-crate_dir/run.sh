@@ -32,7 +32,7 @@ function run_cwltool() {
 
 function run_nextflow() {
   local container="nextflow/nextflow:22.04.4"
-  local cmd_txt="docker run --rm ${D_SOCK} -v ${run_dir}:${run_dir} -w=${exe_dir} ${container} nextflow -dockerize run ${wf_url} ${wf_engine_params} -params-file ${wf_params} --outdir ${outputs_dir} -work-dir ${exe_dir} 1>${stdout} 2>${stderr}"
+  local cmd_txt="docker run --rm ${D_SOCK} -v ${run_dir}:${run_dir} -w=${exe_dir} ${container} nextflow -profile docker run ${wf_url} ${wf_engine_params} -params-file ${wf_params} --outdir ${outputs_dir} -work-dir ${exe_dir} 1>${stdout} 2>${stderr}"
   find ${exe_dir} -type f -exec chmod 777 {} \;
   echo ${cmd_txt} >${cmd}
   eval ${cmd_txt} || executor_error

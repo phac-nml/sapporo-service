@@ -1,0 +1,49 @@
+FROM adoptopenjdk/openjdk12:jre-12.0.2_10-debian
+FROM python:3.8.18-bullseye
+
+COPY --from=adoptopenjdk/openjdk12:jre-12.0.2_10-debian /opt/java/openjdk /opt/java/openjdk
+
+ENV JAVA_HOME /opt/java/openjdk
+
+RUN update-alternatives --install /usr/bin/java java /opt/java/openjdk/bin/java 1
+
+RUN apt update && \
+    apt install -y --no-install-recommends \
+    curl \
+    jq \
+    libmagic-dev \
+    libxml2 \
+    tini && \
+    apt clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN curl -O https://download.docker.com/linux/static/stable/$(uname -m)/docker-24.0.7.tgz && \
+    tar -xzf docker-24.0.7.tgz && \
+    mv docker/* /usr/bin/ && \
+    rm -rf docker docker-24.0.7.tgz
+
+WORKDIR /nextflow
+RUN bash
+RUN apt-get update
+RUN apt-get install -y wget
+RUN wget https://github.com/nextflow-io/nextflow/releases/download/v23.10.0/nextflow
+RUN chmod -R 777 .
+ENV PATH="/nextflow:${PATH}"
+
+# When nextflow -v is run the first time, it takes about 15 sec. This step breaks if nextflow is not installed
+RUN echo $(nextflow -v)
+
+WORKDIR /app
+COPY . .
+RUN python3 -m pip install --no-cache-dir --progress-bar off -U pip setuptools wheel && \
+    python3 -m pip install --no-cache-dir --progress-bar off -e .[tests]
+
+ENV SAPPORO_HOST 0.0.0.0
+ENV SAPPORO_PORT 1122
+ENV SAPPORO_DEBUG True
+
+EXPOSE 1122
+
+ENTRYPOINT ["tini", "--"]
+CMD ["sleep", "infinity"]
