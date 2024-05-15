@@ -18,6 +18,7 @@ function run_wf() {
   upload
   date +"%Y-%m-%dT%H:%M:%S" >${end_time}
   echo 0 >${exit_code}
+  chown_outputs
   echo "COMPLETE" >${state}
   clean_rundir &
   exit 0
@@ -146,6 +147,12 @@ function generate_outputs_list() {
 
 function generate_ro_crate() {
   python3 -c "from sapporo.ro_crate import generate_ro_crate; generate_ro_crate('${run_dir}')" || echo "{}" >"${run_dir}/ro-crate-metadata.json" || true
+}
+
+function chown_outputs() {
+  #MYOUTDIR=$(python3 -c "import json; print(json.load('${wf_params}'['outdir'])")
+  MYOUTDIR=$(python3 -c "import json; print(json.load(open('${wf_params}'))['outdir'])")
+  chown -R ${MYUID}:${MYGID} ${MYOUTDIR}
 }
 
 function upload() {

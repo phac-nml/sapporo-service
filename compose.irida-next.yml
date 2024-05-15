@@ -20,6 +20,8 @@ services:
       - SAPPORO_PORT=1122
       - SAPPORO_DEBUG=True
       - SAPPORO_RUN_DIR=${PWD}/run
+      - MYUID=${MYUID}
+      - MYGID=${MYGID}
       # - SAPPORO_DATA_REMOVE_OLDER_THAN_DAYS=30
       # - SAPPORO_GET_RUNS=True
       # - SAPPORO_RUN_ONLY_REGISTERED_WORKFLOWS=False
