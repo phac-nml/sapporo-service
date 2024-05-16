@@ -18,7 +18,6 @@ function run_wf() {
   upload
   date +"%Y-%m-%dT%H:%M:%S" >${end_time}
   echo 0 >${exit_code}
-  chown_outputs
   echo "COMPLETE" >${state}
   clean_rundir &
   exit 0
@@ -36,6 +35,7 @@ function run_nextflow() {
   find ${exe_dir} -type f -exec chmod 777 {} \;
   echo ${cmd_txt} >${cmd}
   eval ${cmd_txt} || executor_error
+  chown_outputs
 }
 
 function run_toil() {
