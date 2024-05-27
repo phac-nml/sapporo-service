@@ -35,6 +35,7 @@ function run_nextflow() {
   find ${exe_dir} -type f -exec chmod 777 {} \;
   echo ${cmd_txt} >${cmd}
   eval ${cmd_txt} || executor_error
+  chown_outputs
 }
 
 function run_toil() {
@@ -146,6 +147,12 @@ function generate_outputs_list() {
 
 function generate_ro_crate() {
   python3 -c "from sapporo.ro_crate import generate_ro_crate; generate_ro_crate('${run_dir}')" || echo "{}" >"${run_dir}/ro-crate-metadata.json" || true
+}
+
+function chown_outputs() {
+  #MYOUTDIR=$(python3 -c "import json; print(json.load('${wf_params}'['outdir'])")
+  MYOUTDIR=$(python3 -c "import json; print(json.load(open('${wf_params}'))['outdir'])")
+  chown -R ${MYUID}:${MYGID} ${MYOUTDIR}
 }
 
 function upload() {
