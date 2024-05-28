@@ -1,7 +1,7 @@
-FROM adoptopenjdk/openjdk12:jre-12.0.2_10-debian
+FROM adoptopenjdk/openjdk16:jre-16.0.1_9-debian
 FROM python:3.8.18-bullseye
 
-COPY --from=adoptopenjdk/openjdk12:jre-12.0.2_10-debian /opt/java/openjdk /opt/java/openjdk
+COPY --from=adoptopenjdk/openjdk16:jre-16.0.1_9-debian /opt/java/openjdk /opt/java/openjdk
 
 ENV JAVA_HOME /opt/java/openjdk
 
