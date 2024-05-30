@@ -10,6 +10,7 @@ services:
       - ${PWD}/sapporo:/app/sapporo
       - ${PWD}/tests:/app/tests
       - ${IRIDA_NEXT_PATH}/storage:${IRIDA_NEXT_PATH}/storage
+      - ${IRIDA_NEXT_PATH}/tmp/storage:${IRIDA_NEXT_PATH}/tmp/storage
       # The ones below are mounted for cwltool and DinD.
       - ${PWD}/run:${PWD}/run
       - /var/run/docker.sock:/var/run/docker.sock
