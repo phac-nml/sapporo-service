@@ -18,10 +18,10 @@ RUN apt update && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
-RUN curl -O https://download.docker.com/linux/static/stable/$(uname -m)/docker-24.0.7.tgz && \
-    tar -xzf docker-24.0.7.tgz && \
-    mv docker/* /usr/bin/ && \
-    rm -rf docker docker-24.0.7.tgz
+RUN curl -Lo docker.tgz https://download.docker.com/linux/static/stable/x86_64/docker-26.1.4.tgz && \
+    tar -xzf docker.tgz && \
+    mv docker/docker /usr/local/bin/docker && \
+    rm -rf docker docker.tgz
 
 WORKDIR /nextflow
 RUN bash
@@ -36,7 +36,7 @@ RUN echo $(nextflow -v)
 
 WORKDIR /app
 COPY . .
-RUN python3 -m pip install --no-cache-dir --progress-bar off -U pip setuptools wheel && \
+RUN python3 -m pip install --no-cache-dir --progress-bar off -U pip && \
     python3 -m pip install --no-cache-dir --progress-bar off -e .[tests]
 
 ENV SAPPORO_HOST 0.0.0.0
