@@ -1,4 +1,3 @@
-version: "3.5"
 services:
   app:
     build:
@@ -12,7 +11,7 @@ services:
       - ${IRIDA_NEXT_PATH}/storage:${IRIDA_NEXT_PATH}/storage
       - ${IRIDA_NEXT_PATH}/tmp:${IRIDA_NEXT_PATH}/tmp
       # The ones below are mounted for cwltool and DinD.
-      - ${PWD}/run:${PWD}/run
+      - ${PWD}/runs:${PWD}/runs
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp:/tmp
     environment:
@@ -20,7 +19,8 @@ services:
       - SAPPORO_HOST=0.0.0.0
       - SAPPORO_PORT=1122
       - SAPPORO_DEBUG=True
-      - SAPPORO_RUN_DIR=${PWD}/run
+      - SAPPORO_RUN_DIR=${PWD}/runs
+      - SAPPORO_RUN_SH=/app/sapporo/run_irida_next.sh
       - MYUID=${MYUID}
       - MYGID=${MYGID}
       # - SAPPORO_DATA_REMOVE_OLDER_THAN_DAYS=30
