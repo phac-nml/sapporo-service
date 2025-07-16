@@ -135,9 +135,12 @@ function cancel_cwltool() {
 }
 
 function chown_outputs() {
-    #MYOUTDIR=$(python3 -c "import json; print(json.load('${wf_params}'['outdir'])")
     MYOUTDIR=$(python3 -c "import json; print(json.load(open('${wf_params}'))['outdir'])")
-    chown -R ${MYUID}:${MYGID} ${MYOUTDIR}
+    if [[ ! -v IRIDA_NEXT_PATH ]]; then
+        chown -R ${MYUID}:${MYGID} ${MYOUTDIR}
+    else
+        chown -R $(stat -c '%u:%g' $IRIDA_NEXT_PATH) ${MYOUTDIR}
+    fi
 }
 
 function upload() {
