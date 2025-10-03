@@ -34,7 +34,9 @@ function run_nextflow() {
     find ${exe_dir} -type f -exec chmod 777 {} \;
     echo ${cmd_txt} >${cmd}
     eval ${cmd_txt} || executor_error
-    chown_outputs
+    if [[ ! -v SKIP_CHOWN_OUTPUTS ]]; then
+        chown_outputs
+    fi
 }
 
 function run_toil() {
