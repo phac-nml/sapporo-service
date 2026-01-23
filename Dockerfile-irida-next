@@ -27,7 +27,7 @@ WORKDIR /nextflow
 RUN bash
 RUN apt-get update
 RUN apt-get install -y wget
-RUN wget https://github.com/nextflow-io/nextflow/releases/download/v23.10.0/nextflow
+RUN wget https://github.com/nextflow-io/nextflow/releases/download/v24.10.3/nextflow
 RUN chmod -R 777 .
 ENV PATH="/nextflow:${PATH}"
 
