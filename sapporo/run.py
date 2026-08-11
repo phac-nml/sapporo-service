@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 import logging
@@ -163,6 +164,50 @@ def write_wf_attachment(run_id: str, run_request: RunRequestForm) -> None:
                 shutil.copyfileobj(file.file, buffer)
 
 
+# A single deadline cannot serve both purposes: an unreachable host has to fail fast, while a large
+# attachment legitimately takes a while to arrive. Attachments come from arbitrary URLs, so the
+# transient failures below (connection resets, a proxy restarting, a gateway returning 502) are
+# expected rather than exceptional, and one attempt is not enough to distinguish them from a real
+# outage.
+ATTACHMENT_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
+ATTACHMENT_MAX_ATTEMPTS = 3
+ATTACHMENT_RETRY_BACKOFF_SECONDS = 1.0
+ATTACHMENT_RETRY_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+async def _get_wf_attachment(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    """GET a workflow attachment, retrying transient failures with exponential backoff."""
+    last_error: Exception
+    for attempt in range(1, ATTACHMENT_MAX_ATTEMPTS + 1):
+        try:
+            res = await client.get(
+                url, timeout=ATTACHMENT_TIMEOUT, follow_redirects=True, headers={"User-Agent": user_agent()}
+            )
+            res.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code not in ATTACHMENT_RETRY_STATUS_CODES:
+                raise
+            last_error = e
+        except httpx.TransportError as e:
+            last_error = e
+        else:
+            return res
+
+        if attempt < ATTACHMENT_MAX_ATTEMPTS:
+            backoff = ATTACHMENT_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            LOGGER.warning(
+                "Retrying workflow attachment download: url=%s, attempt=%d/%d, backoff=%.1fs, error=%s",
+                url,
+                attempt,
+                ATTACHMENT_MAX_ATTEMPTS,
+                backoff,
+                last_error,
+            )
+            await asyncio.sleep(backoff)
+
+    raise last_error
+
+
 async def download_wf_attachment(run_id: str, run_request: RunRequestForm) -> None:
     exe_dir = resolve_content_path(run_id, "exe_dir")
     for obj in run_request.workflow_attachment_obj:
@@ -179,13 +224,12 @@ async def download_wf_attachment(run_id: str, run_request: RunRequestForm) -> No
             file_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 async with httpx.AsyncClient() as client:
-                    res = await client.get(url, timeout=10, follow_redirects=True, headers={"User-Agent": user_agent()})
-                    res.raise_for_status()
+                    res = await _get_wf_attachment(client, url)
                     with file_path.open(mode="wb") as f:
                         f.write(res.content)
             except httpx.HTTPStatusError as e:
                 # Because it is a background task, raise Exception instead of HTTPException
-                msg = f"Failed to download workflow attachment {obj}: {res.status_code} {res.text}"
+                msg = f"Failed to download workflow attachment {obj}: {e.response.status_code} {e.response.text}"
                 raise Exception(msg) from e
             except Exception as e:
                 # Because it is a background task, raise Exception instead of HTTPException
@@ -211,6 +255,11 @@ def fork_run(run_id: str) -> None:
     LOGGER.debug("Run forked: run_id=%s, pid=%d", run_id, process.pid or -1)
 
 
+# Reported as the exit code when the run fails before run.sh is ever started, so that the run log
+# carries a failure exit code instead of null.
+POST_RUN_TASK_FAILURE_EXIT_CODE = 1
+
+
 async def post_run_task(run_id: str, run_request: RunRequestForm) -> None:
     """Run in the background after issuing a run_id in POST /runs."""
     try:
@@ -218,6 +267,7 @@ async def post_run_task(run_id: str, run_request: RunRequestForm) -> None:
         fork_run(run_id)
     except Exception as e:
         LOGGER.exception("Background task failed for run %s", run_id)
+        write_file(run_id, "exit_code", POST_RUN_TASK_FAILURE_EXIT_CODE)
         write_file(run_id, "state", State.SYSTEM_ERROR)
         write_file(run_id, "end_time", now_str())
         error_msg = "".join(traceback.TracebackException.from_exception(e).format())

@@ -3,7 +3,7 @@ import signal
 import zipfile
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1285,3 +1285,151 @@ def test_reconcile_runs_pbt_only_non_terminal_reconciled(states: list[State]) ->
                 assert read_state(run_id) in terminal_states
         finally:
             sapporo.run_io.get_config = original_get_config  # type: ignore[attr-defined]
+
+
+# === download_wf_attachment retry ===
+
+
+def _make_async_httpx_client_with_side_effect(side_effect: Any) -> MagicMock:
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(side_effect=side_effect)
+
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_download_wf_attachment_retries_transport_error_then_succeeds(
+    mocker: "MockerFixture",
+    tmp_path: Path,
+) -> None:
+    _setup_config(mocker, tmp_path)
+    import httpx
+
+    from sapporo.run import download_wf_attachment, resolve_content_path
+
+    run_id = "aabbccdd-0000-0000-0000-000000000090"
+    create_run_dir(tmp_path, run_id)
+
+    ok = MagicMock()
+    ok.content = b"eventually arrived"
+    ok.raise_for_status = MagicMock()
+
+    mock_client = _make_async_httpx_client_with_side_effect([httpx.ConnectError("connection reset"), ok])
+    mocker.patch("sapporo.run.httpx.AsyncClient", return_value=mock_client)
+    mocker.patch("sapporo.run.asyncio.sleep", new_callable=AsyncMock)
+
+    req = make_run_request_form(
+        workflow_attachment_obj=[{"file_name": "helper.cwl", "file_url": "https://example.com/helper.cwl"}]
+    )
+    await download_wf_attachment(run_id, req)
+
+    assert mock_client.get.await_count == 2
+    assert (resolve_content_path(run_id, "exe_dir") / "helper.cwl").read_bytes() == b"eventually arrived"
+
+
+@pytest.mark.asyncio
+async def test_download_wf_attachment_retries_retryable_status_then_succeeds(
+    mocker: "MockerFixture",
+    tmp_path: Path,
+) -> None:
+    _setup_config(mocker, tmp_path)
+    import httpx
+
+    from sapporo.run import download_wf_attachment, resolve_content_path
+
+    run_id = "aabbccdd-0000-0000-0000-000000000091"
+    create_run_dir(tmp_path, run_id)
+
+    bad_gateway = MagicMock()
+    bad_gateway.status_code = 502
+    bad_gateway.text = "Bad Gateway"
+    bad_gateway.raise_for_status.side_effect = httpx.HTTPStatusError("502", request=MagicMock(), response=bad_gateway)
+    ok = MagicMock()
+    ok.content = b"served after the proxy came back"
+    ok.raise_for_status = MagicMock()
+
+    mock_client = _make_async_httpx_client_with_side_effect([bad_gateway, ok])
+    mocker.patch("sapporo.run.httpx.AsyncClient", return_value=mock_client)
+    mocker.patch("sapporo.run.asyncio.sleep", new_callable=AsyncMock)
+
+    req = make_run_request_form(
+        workflow_attachment_obj=[{"file_name": "helper.cwl", "file_url": "https://example.com/helper.cwl"}]
+    )
+    await download_wf_attachment(run_id, req)
+
+    assert mock_client.get.await_count == 2
+    assert (resolve_content_path(run_id, "exe_dir") / "helper.cwl").read_bytes() == b"served after the proxy came back"
+
+
+@pytest.mark.asyncio
+async def test_download_wf_attachment_does_not_retry_client_error(mocker: "MockerFixture", tmp_path: Path) -> None:
+    _setup_config(mocker, tmp_path)
+    import httpx
+
+    from sapporo.run import download_wf_attachment
+
+    run_id = "aabbccdd-0000-0000-0000-000000000092"
+    create_run_dir(tmp_path, run_id)
+
+    not_found = MagicMock()
+    not_found.status_code = 404
+    not_found.text = "Not Found"
+    not_found.raise_for_status.side_effect = httpx.HTTPStatusError("404", request=MagicMock(), response=not_found)
+
+    mock_client = _make_async_httpx_client_with_side_effect([not_found])
+    mocker.patch("sapporo.run.httpx.AsyncClient", return_value=mock_client)
+    sleep_mock = mocker.patch("sapporo.run.asyncio.sleep", new_callable=AsyncMock)
+
+    req = make_run_request_form(
+        workflow_attachment_obj=[{"file_name": "missing.cwl", "file_url": "https://example.com/missing.cwl"}]
+    )
+    with pytest.raises(Exception, match="Failed to download"):
+        await download_wf_attachment(run_id, req)
+
+    assert mock_client.get.await_count == 1
+    sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_download_wf_attachment_gives_up_after_max_attempts(mocker: "MockerFixture", tmp_path: Path) -> None:
+    _setup_config(mocker, tmp_path)
+    import httpx
+
+    from sapporo.run import ATTACHMENT_MAX_ATTEMPTS, download_wf_attachment
+
+    run_id = "aabbccdd-0000-0000-0000-000000000093"
+    create_run_dir(tmp_path, run_id)
+
+    mock_client = _make_async_httpx_client_with_side_effect(httpx.ConnectError("connection reset"))
+    mocker.patch("sapporo.run.httpx.AsyncClient", return_value=mock_client)
+    mocker.patch("sapporo.run.asyncio.sleep", new_callable=AsyncMock)
+
+    req = make_run_request_form(
+        workflow_attachment_obj=[{"file_name": "helper.cwl", "file_url": "https://example.com/helper.cwl"}]
+    )
+    with pytest.raises(Exception, match="Failed to download"):
+        await download_wf_attachment(run_id, req)
+
+    assert mock_client.get.await_count == ATTACHMENT_MAX_ATTEMPTS
+
+
+# === post_run_task exit code ===
+
+
+@pytest.mark.asyncio
+async def test_post_run_task_failure_writes_exit_code(mocker: "MockerFixture", tmp_path: Path) -> None:
+    """A failure before fork_run must still report an exit code, not exitCode=null."""
+    _setup_config(mocker, tmp_path)
+    from sapporo.run import POST_RUN_TASK_FAILURE_EXIT_CODE, post_run_task, read_file, read_state
+
+    run_id = "aabbccdd-0000-0000-0000-000000000094"
+    create_run_dir(tmp_path, run_id, state="INITIALIZING")
+
+    mocker.patch("sapporo.run.download_wf_attachment", side_effect=Exception("attachment download failed"))
+
+    await post_run_task(run_id, make_run_request_form())
+
+    assert read_state(run_id) == State.SYSTEM_ERROR
+    assert read_file(run_id, "exit_code") == POST_RUN_TASK_FAILURE_EXIT_CODE
