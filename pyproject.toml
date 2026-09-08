@@ -80,6 +80,9 @@ packages = ["sapporo"]
 [tool.poetry]
 version = "0.0.0" # Placeholder value that the plugin overrides
 
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+
 [tool.pytest.ini_options]
 addopts = "-v --tb=short --strict-markers"
 asyncio_mode = "strict"
