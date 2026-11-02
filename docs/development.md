@@ -180,7 +180,7 @@ GitHub Actions runs the following workflows (`.github/workflows/`):
 | `docs` | push to `main` | mkdocs build and deploy to GitHub Pages |
 | `release` | tag push | PyPI publish, Docker image push, GitHub Release |
 
-`lint` and `pytest` install from `uv.lock` (`uv sync --locked`), so they test the same versions that the Docker image gets. `latest-deps` ignores the lock, so it catches an upstream change (for example a removed import) before it reaches `pip install sapporo` users. Dependabot opens a weekly pull request that updates `uv.lock`.
+`lint` and `pytest` install from `uv.lock` (`uv sync --locked`), so they test the same versions that the Docker image gets. `latest-deps` ignores the lock, so it catches an upstream change (for example a removed import) before it reaches `pip install sapporo` users. To update `uv.lock`, run `uv lock --upgrade` and open a pull request.
 
 ## Release Process
 
