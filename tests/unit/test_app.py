@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     from sapporo.auth import AuthConfig
     from sapporo.config import AppConfig
-    from sapporo.schemas import ExecutableWorkflows
+    from sapporo.schemas import ExecutableWorkflows, ServiceInfo
 
 
 # === Helper ===
@@ -156,6 +156,22 @@ def _setup_init_mocks_through_executable_wfs(
     return config
 
 
+def _service_info_with_default_params(
+    mocker: "MockerFixture", tmp_path: Path, params: list[dict[str, str]]
+) -> "ServiceInfo":
+    """Build a ServiceInfo from a service_info.json that sets default_workflow_engine_parameters of snakemake."""
+    import json
+
+    from sapporo.config import AppConfig
+    from sapporo.factory import create_service_info
+
+    si_path = tmp_path / "service_info_with_defaults.json"
+    si_path.write_text(json.dumps({"default_workflow_engine_parameters": {"snakemake": params}}), encoding="utf-8")
+    mocker.patch("sapporo.factory.get_config", return_value=AppConfig(run_dir=tmp_path, service_info=si_path))
+    create_service_info.cache_clear()
+    return create_service_info()
+
+
 # === fix_error_handler ===
 
 
@@ -193,19 +209,22 @@ class TestFixErrorHandler:
         client = _create_error_test_app(mocker, debug=True)
         mock_logger = mocker.patch("sapporo.app.LOGGER")
         client.get("/raise-http-404")
-        mock_logger.exception.assert_called_once()
+        mock_logger.error.assert_called_once()
+        assert mock_logger.error.call_args.kwargs["exc_info"] is not None
 
     def test_generic_exception_logs_traceback(self, mocker: "MockerFixture") -> None:
         client = _create_error_test_app(mocker)
         mock_logger = mocker.patch("sapporo.app.LOGGER")
         client.get("/raise-runtime-error")
-        mock_logger.exception.assert_called_once()
+        mock_logger.error.assert_called_once()
+        assert mock_logger.error.call_args.kwargs["exc_info"] is not None
 
     def test_generic_exception_logs_traceback_in_debug_mode(self, mocker: "MockerFixture") -> None:
         client = _create_error_test_app(mocker, debug=True)
         mock_logger = mocker.patch("sapporo.app.LOGGER")
         client.get("/raise-runtime-error")
-        mock_logger.exception.assert_called_once()
+        mock_logger.error.assert_called_once()
+        assert mock_logger.error.call_args.kwargs["exc_info"] is not None
 
 
 # === CORSMiddleware ===
@@ -235,7 +254,7 @@ class TestCORSMiddleware:
         )
         assert res.status_code == 200
 
-    def test_with_cookie_uses_explicit_origin(self) -> None:
+    def test_with_cookie_and_wildcard_origin_returns_wildcard(self) -> None:
         client = _create_cors_test_app()
         res = client.get(
             "/hello",
@@ -244,7 +263,7 @@ class TestCORSMiddleware:
                 "Cookie": "session=abc123",
             },
         )
-        assert res.headers["access-control-allow-origin"] == "http://example.com"
+        assert res.headers["access-control-allow-origin"] == "*"
 
     def test_non_http_scope_passes_through(self) -> None:
         client = _create_cors_test_app()
@@ -313,33 +332,117 @@ class TestInitAppState:
         with pytest.raises(FileNotFoundError, match="Auth config file not found"):
             init_app_state()
 
-    def test_auth_enabled_weak_secret_non_debug_raises_value_error(
-        self, mocker: "MockerFixture", tmp_path: Path
+    @pytest.mark.parametrize("debug", [False, True])
+    @pytest.mark.parametrize(
+        "secret_key",
+        ["sapporo_secret_key_please_change_this", "secret", "a" * 31],
+    )
+    def test_auth_enabled_weak_secret_raises_value_error_also_in_debug_mode(
+        self, mocker: "MockerFixture", tmp_path: Path, debug: bool, secret_key: str
     ) -> None:
         from sapporo.app import init_app_state
 
-        _setup_init_mocks_through_executable_wfs(mocker, tmp_path, debug=False)
+        _setup_init_mocks_through_executable_wfs(mocker, tmp_path, debug=debug)
         mocker.patch(
             "sapporo.app.get_auth_config",
-            return_value=_make_auth_config(auth_enabled=True, secret_key="secret"),
+            return_value=_make_auth_config(auth_enabled=True, secret_key=secret_key),
         )
 
-        with pytest.raises(ValueError, match="Auth config file is invalid"):
+        with pytest.raises(ValueError, match="Auth config file is invalid") as exc_info:
             init_app_state()
+        assert "Weak secret_key" in str(exc_info.value.__cause__)
 
-    def test_auth_enabled_weak_secret_debug_logs_warning(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+    def test_auth_enabled_secret_of_32_characters_succeeds(self, mocker: "MockerFixture", tmp_path: Path) -> None:
         from sapporo.app import init_app_state
 
-        _setup_init_mocks_through_executable_wfs(mocker, tmp_path, debug=True)
+        _setup_init_mocks_through_executable_wfs(mocker, tmp_path)
         mocker.patch(
             "sapporo.app.get_auth_config",
-            return_value=_make_auth_config(auth_enabled=True, secret_key="secret"),
+            return_value=_make_auth_config(auth_enabled=True, secret_key="a" * 32),
         )
+
+        init_app_state()  # Should not raise
+
+    def test_auth_disabled_weak_secret_succeeds(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        from sapporo.app import init_app_state
+
+        _setup_init_mocks_through_executable_wfs(mocker, tmp_path)
+        mocker.patch(
+            "sapporo.app.get_auth_config",
+            return_value=_make_auth_config(auth_enabled=False, secret_key="sapporo_secret_key_please_change_this"),
+        )
+
+        init_app_state()  # Should not raise
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            {"name": "--cores", "type": "int", "default_value": "1; rm -rf /"},
+            {"name": "--cores$(id)", "type": "int", "default_value": "1"},
+        ],
+    )
+    def test_default_engine_param_with_forbidden_characters_raises_value_error(
+        self, mocker: "MockerFixture", tmp_path: Path, param: dict[str, str]
+    ) -> None:
+        from sapporo.app import init_app_state
+
+        _setup_init_mocks_through_executable_wfs(mocker, tmp_path)
+        mocker.patch(
+            "sapporo.app.create_service_info",
+            return_value=_service_info_with_default_params(mocker, tmp_path, [param]),
+        )
+        mocker.patch("sapporo.app.get_auth_config", return_value=_make_auth_config())
+
+        with pytest.raises(ValueError, match="Service info file is invalid") as exc_info:
+            init_app_state()
+        assert "forbidden characters" in str(exc_info.value.__cause__)
+
+    def test_default_engine_param_with_safe_values_succeeds(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        from sapporo.app import init_app_state
+
+        _setup_init_mocks_through_executable_wfs(mocker, tmp_path)
+        mocker.patch(
+            "sapporo.app.create_service_info",
+            return_value=_service_info_with_default_params(
+                mocker, tmp_path, [{"name": "--cores", "type": "int", "default_value": "1"}, {"name": "--use-conda"}]
+            ),
+        )
+        mocker.patch("sapporo.app.get_auth_config", return_value=_make_auth_config())
+
+        init_app_state()  # Should not raise
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes"])
+    def test_insecure_idp_allowed_logs_warning(
+        self, mocker: "MockerFixture", tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        from sapporo.app import init_app_state
+
+        _setup_init_mocks_through_executable_wfs(mocker, tmp_path)
+        mocker.patch("sapporo.app.get_auth_config", return_value=_make_auth_config())
+        monkeypatch.setenv("SAPPORO_ALLOW_INSECURE_IDP", value)
         mock_logger = mocker.patch("sapporo.app.LOGGER")
 
         init_app_state()
 
-        assert any("Weak secret_key" in str(call) for call in mock_logger.warning.call_args_list)
+        assert any("SAPPORO_ALLOW_INSECURE_IDP" in str(call) for call in mock_logger.warning.call_args_list)
+
+    @pytest.mark.parametrize("value", [None, "false", ""])
+    def test_insecure_idp_not_allowed_does_not_log_warning(
+        self, mocker: "MockerFixture", tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None
+    ) -> None:
+        from sapporo.app import init_app_state
+
+        _setup_init_mocks_through_executable_wfs(mocker, tmp_path)
+        mocker.patch("sapporo.app.get_auth_config", return_value=_make_auth_config())
+        if value is None:
+            monkeypatch.delenv("SAPPORO_ALLOW_INSECURE_IDP", raising=False)
+        else:
+            monkeypatch.setenv("SAPPORO_ALLOW_INSECURE_IDP", value)
+        mock_logger = mocker.patch("sapporo.app.LOGGER")
+
+        init_app_state()
+
+        assert not any("SAPPORO_ALLOW_INSECURE_IDP" in str(call) for call in mock_logger.warning.call_args_list)
 
     def test_external_confidential_missing_secret_raises_value_error(
         self, mocker: "MockerFixture", tmp_path: Path
@@ -416,3 +519,36 @@ class TestMain:
 
         _, kwargs = mock_uvicorn.call_args
         assert kwargs["reload"] is True
+
+
+# === _run_maintenance_task ===
+
+
+class TestRunMaintenanceTask:
+    @pytest.mark.asyncio
+    async def test_runs_the_function(self) -> None:
+        from sapporo.app import _run_maintenance_task
+
+        calls: list[int] = []
+
+        def record() -> None:
+            calls.append(1)
+
+        await _run_maintenance_task(record)
+
+        assert calls == [1]
+
+    @pytest.mark.asyncio
+    async def test_logs_and_swallows_exception(self, mocker: "MockerFixture") -> None:
+        from sapporo.app import _run_maintenance_task
+
+        def failing() -> None:
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        mock_exception = mocker.patch("sapporo.app.LOGGER.exception")
+
+        await _run_maintenance_task(failing)
+
+        mock_exception.assert_called_once()
+        assert "failing" in str(mock_exception.call_args)

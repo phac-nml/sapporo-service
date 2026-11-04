@@ -1,9 +1,12 @@
+import asyncio
 import json
+import shutil
 from typing import Literal, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
 from sapporo.auth import (
     MeResponse,
@@ -35,6 +38,8 @@ from sapporo.run import (
     post_run_task,
     prepare_run_dir,
     resolve_content_path,
+    resolve_output_file,
+    resolve_run_dir,
     ro_crate_zip_stream,
 )
 from sapporo.schemas import (
@@ -44,8 +49,10 @@ from sapporo.schemas import (
     RunId,
     RunListResponse,
     RunLog,
+    RunRequestForm,
     RunRequestJson,
     RunStatus,
+    RunSummary,
     ServiceInfo,
     State,
     TaskListResponse,
@@ -77,13 +84,11 @@ _EXT = f"**sapporo-wes-{SAPPORO_WES_SPEC_VERSION} extension:**"
     response_model=ServiceInfo,
 )
 async def get_service_info(
-    token: str | None = auth_depends_factory(),
+    token: str | None = auth_depends_factory(optional=True),
 ) -> ServiceInfo:
-    service_info = create_service_info()
     username = await resolve_username(token)
-    service_info.system_state_counts = system_state_counts(username)
-
-    return service_info
+    # create_service_info() is cached, so the per-request counts go into a copy
+    return create_service_info().model_copy(update={"system_state_counts": system_state_counts(username)})
 
 
 @router.get(
@@ -133,12 +138,17 @@ async def list_runs(
     token: str | None = auth_depends_factory(),
 ) -> RunListResponse:
     username = await resolve_username(token)
-    (db_runs, next_page_token) = list_runs_db(page_size, page_token, sort_order, state, run_ids, username, tags)
-    if latest:  # noqa: SIM108
-        runs = [create_run_summary(run.run_id) for run in db_runs]
-    else:
-        runs = db_runs_to_run_summaries(db_runs)
-    total_runs = count_runs_db(state, run_ids, username, tags)
+
+    def read_page() -> tuple[list[RunSummary], str | None, int]:
+        db_runs, next_page_token = list_runs_db(page_size, page_token, sort_order, state, run_ids, username, tags)
+        if latest:  # noqa: SIM108
+            runs = [create_run_summary(run.run_id) for run in db_runs]
+        else:
+            runs = db_runs_to_run_summaries(db_runs)
+        return runs, next_page_token, count_runs_db(state, run_ids, username, tags)
+
+    # The index queries and up to page_size run directory reads block, so they run off the event loop
+    runs, next_page_token, total_runs = await asyncio.to_thread(read_page)
     return RunListResponse(
         runs=runs,
         next_page_token=next_page_token,
@@ -157,6 +167,7 @@ async def list_runs(
 - Added a field `workflow_attachment_obj`. With this field, download files from remote locations directly to the execution directory.
 - `workflow_type_version` and `workflow_url` are now required.
 - Supports `application/json` request body in addition to `multipart/form-data`.
+- When `executable_workflows.json` lists workflows, `workflow_engine_parameters` is rejected with 400 and the `default_workflow_engine_parameters` of the service are used.
 """,
     response_model=RunId,
     openapi_extra={
@@ -243,10 +254,32 @@ async def run_workflow(
     username = await resolve_username(token)
     run_id = str(uuid4())
 
+    try:
+        run_request = await _prepare_run(request, run_id, username)
+    except HTTPException:
+        # A rejected request must not leave a half-written run directory behind
+        shutil.rmtree(resolve_run_dir(run_id), ignore_errors=True)
+        raise
+
+    await asyncio.to_thread(lambda: add_run_db(create_run_summary(run_id), username))
+    background_tasks.add_task(post_run_task, run_id, run_request)
+    return RunId(run_id=run_id)
+
+
+async def _prepare_run(request: Request, run_id: str, username: str | None) -> RunRequestForm:
+    """Validate the request body (JSON or multipart form) and prepare the run directory."""
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
-        body = await request.json()
-        json_req = RunRequestJson(**body)
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            raise_bad_request("Invalid JSON body.")
+        if not isinstance(body, dict):
+            raise_bad_request("JSON body must be an object.")
+        try:
+            json_req = RunRequestJson.model_validate(body)
+        except ValidationError as e:
+            raise_bad_request(f"Invalid request body: {e.errors(include_url=False)}")
         run_request = validate_run_request(
             json.dumps(json_req.workflow_params) if json_req.workflow_params is not None else None,
             json_req.workflow_type,
@@ -263,28 +296,24 @@ async def run_workflow(
             if json_req.workflow_attachment_obj
             else None,
         )
-        prepare_run_dir(run_id, run_request, username)
-    else:
-        async with request.form() as form:
-            run_request = validate_run_request(
-                str(form.get("workflow_params")) if form.get("workflow_params") is not None else None,
-                str(form.get("workflow_type", "")),
-                str(form.get("workflow_type_version")) if form.get("workflow_type_version") is not None else None,
-                str(form.get("tags")) if form.get("tags") is not None else None,
-                str(form.get("workflow_engine", "")),
-                str(form.get("workflow_engine_version")) if form.get("workflow_engine_version") is not None else None,
-                str(form.get("workflow_engine_parameters"))
-                if form.get("workflow_engine_parameters") is not None
-                else None,
-                str(form.get("workflow_url")) if form.get("workflow_url") is not None else None,
-                cast("list[UploadFile]", form.getlist("workflow_attachment")),
-                str(form.get("workflow_attachment_obj")) if form.get("workflow_attachment_obj") is not None else None,
-            )
-            prepare_run_dir(run_id, run_request, username)
+        await asyncio.to_thread(prepare_run_dir, run_id, run_request, username)
+        return run_request
 
-    add_run_db(create_run_summary(run_id), username)
-    background_tasks.add_task(post_run_task, run_id, run_request)
-    return RunId(run_id=run_id)
+    async with request.form() as form:
+        run_request = validate_run_request(
+            str(form.get("workflow_params")) if form.get("workflow_params") is not None else None,
+            str(form.get("workflow_type", "")),
+            str(form.get("workflow_type_version")) if form.get("workflow_type_version") is not None else None,
+            str(form.get("tags")) if form.get("tags") is not None else None,
+            str(form.get("workflow_engine", "")),
+            str(form.get("workflow_engine_version")) if form.get("workflow_engine_version") is not None else None,
+            str(form.get("workflow_engine_parameters")) if form.get("workflow_engine_parameters") is not None else None,
+            str(form.get("workflow_url")) if form.get("workflow_url") is not None else None,
+            cast("list[UploadFile]", form.getlist("workflow_attachment")),
+            str(form.get("workflow_attachment_obj")) if form.get("workflow_attachment_obj") is not None else None,
+        )
+        await asyncio.to_thread(prepare_run_dir, run_id, run_request, username)
+        return run_request
 
 
 @router.get(
@@ -306,7 +335,8 @@ async def get_run_log(
     username = await resolve_username(token)
     validate_run_id(run_id, username)
 
-    return create_run_log(run_id)
+    # Reads the engine logs, so it runs off the event loop
+    return await asyncio.to_thread(create_run_log, run_id)
 
 
 @router.get(
@@ -408,8 +438,8 @@ if a run is in progress, it will be canceled first, then its contents will be de
     response_model=BulkDeleteResponse,
 )
 async def delete_runs(
+    background_tasks: BackgroundTasks,
     run_ids: list[str] = Query(..., description="Run IDs to delete."),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     token: str | None = auth_depends_factory(),
 ) -> BulkDeleteResponse:
     username = await resolve_username(token)
@@ -428,8 +458,8 @@ async def delete_runs(
 {_EXT}
 Delete the run and associated files.
 If the run is in progress, it will be canceled first.
-Then, the run directory contents will be deleted, but `state.txt`, `start_time.txt`, and `end_time.txt` will not be deleted.
-This is because the information that the run has been deleted should be retained.
+Then, the run directory contents will be deleted, but `state.txt`, `start_time.txt`, `end_time.txt`, and `username.txt` will not be deleted.
+This is because the information that the run has been deleted should be retained: the run stays listed with state `DELETED`.
 """,
     response_model=RunId,
 )
@@ -505,8 +535,10 @@ async def get_run_outputs_list(
     username = await resolve_username(token)
     validate_run_id(run_id, username)
     if download:
+        if not resolve_content_path(run_id, "outputs_dir").is_dir():
+            raise_not_found("Outputs of run", run_id)
         sanitized_name = str(secure_filepath(name)) if name else f"sapporo_{run_id}_outputs"
-        stream, content_length = outputs_zip_stream(run_id, sanitized_name)
+        stream, content_length = await asyncio.to_thread(outputs_zip_stream, run_id, sanitized_name)
         return StreamingResponse(
             stream,
             media_type="application/zip",
@@ -515,14 +547,14 @@ async def get_run_outputs_list(
                 "Content-Length": str(content_length),
             },
         )
-    return create_outputs_list_response(run_id)
+    return await asyncio.to_thread(create_outputs_list_response, run_id)
 
 
 @router.get(
     "/runs/{run_id}/outputs/{path:path}",
     tags=[TAG_EXT],
     summary="DownloadRunOutput",
-    description=f"{_EXT} Download a specific output file from a run.",
+    description=f"{_EXT} Download a specific output file from a run. The path is taken as it is listed in `GET /runs/{{run_id}}/outputs`. A symlink is followed only when its target is inside the run directory.",
     response_model=None,
     responses={
         200: {
@@ -538,13 +570,7 @@ async def get_run_outputs(
 ) -> FileResponse:
     username = await resolve_username(token)
     validate_run_id(run_id, username)
-    outputs_dir = resolve_content_path(run_id, "outputs_dir").resolve()
-    file_path = outputs_dir.joinpath(secure_filepath(path)).resolve()
-    if not file_path.is_relative_to(outputs_dir):
-        raise_bad_request(f"Invalid file path: {path!r}")
-    if not file_path.exists():
-        raise_not_found("File", path)
-    return FileResponse(file_path)
+    return FileResponse(resolve_output_file(run_id, path))
 
 
 @router.get(
@@ -578,7 +604,7 @@ async def get_run_ro_crate(
     username = await resolve_username(token)
     validate_run_id(run_id, username)
     if download:
-        stream, content_length = ro_crate_zip_stream(run_id)
+        stream, content_length = await asyncio.to_thread(ro_crate_zip_stream, run_id)
         return StreamingResponse(
             stream,
             media_type="application/zip",
@@ -588,7 +614,7 @@ async def get_run_ro_crate(
             },
         )
     return JSONResponse(
-        content=create_ro_crate_response(run_id),
+        content=await asyncio.to_thread(create_ro_crate_response, run_id),
         media_type="application/ld+json",
     )
 
@@ -607,6 +633,8 @@ This endpoint supports both authentication modes:
 - **Sapporo IdP mode**: Authenticates against local user credentials defined in `auth_config.json`.
   Passwords are verified using Argon2 hash comparison.
 - **External IdP mode (confidential client)**: Forwards credentials to the external IdP's token endpoint.
+
+When authentication is disabled, this endpoint returns 400.
 
 The returned JWT token should be included in subsequent requests using the `Authorization: Bearer <token>` header.
 

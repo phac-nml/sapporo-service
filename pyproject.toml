@@ -10,7 +10,7 @@ authors = [
 ]
 description = "The sapporo-service is a standard implementation conforming to the Global Alliance for Genomics and Health (GA4GH) Workflow Execution Service (WES) API specification."
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["workflow", "WES", "GA4GH-WES", "bioinformatics"]
 license = { text = "Apache-2.0" }
 classifiers = [
@@ -19,10 +19,10 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
@@ -36,8 +36,10 @@ dependencies = [
     "python-magic>=0.4,<1",
     "python-multipart>=0.0.5",
     "pyyaml>=6,<7",
-    "rocrate>=0.9,<1",
+    "rocrate>=0.15,<1",
+    "sqlalchemy>=2,<3",
     "sqlmodel>=0.0.14,<1",
+    "starlette>=0.27,<2",
     "uvicorn[standard]>=0.20,<1",
     "zipstream-ng>=1,<2",
 ]
@@ -49,6 +51,7 @@ Repository = "https://github.com/sapporo-wes/sapporo-service.git"
 
 [project.optional-dependencies]
 tests = [
+    "httpx2", # Required by starlette.testclient (successor of httpx, same author)
     "hypothesis",
     "mutmut",
     "mypy",
@@ -58,7 +61,6 @@ tests = [
     "pytest",
     "roc-validator",
     "ruff",
-    "runcrate",
     "types-cachetools",
     "types-PyYAML",
 ]
@@ -106,13 +108,16 @@ explicit_package_bases = true
 mypy_path = "."
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 120
 exclude = ["tests/resources/"]
 
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
+    # Copyright notice (not used in this project)
+    "CPY001",
+
     # Docstring (not required in this project)
     "D100",
     "D101",
@@ -150,6 +155,7 @@ ignore = [
 
     # Import style (circular import workaround, fix in Phase 9)
     "PLC0415",
+    "ICN001", # Import alias convention (`datetime` is used by its full module name)
 
     # Boolean arguments (conflicts with FastAPI Query pattern)
     "FBT001", # Boolean type hint positional argument
@@ -161,13 +167,6 @@ ignore = [
     "FAST001", # Redundant response_model (intentional for API docs)
     "FAST002", # Non-annotated dependency (existing pattern)
     "ARG001",  # Unused function argument (unimplemented endpoints)
-
-    # Security (false positives / intentional)
-    "S104", # Hardcoded bind all interfaces (server)
-    "S105", # Hardcoded password string (field names)
-    "S108", # Hardcoded temp file
-    "S110", # Try-except-pass (intentional)
-    "S603", # Subprocess without shell (intentional)
 
     # Miscellaneous
     "N815",   # Mixed case variable in class scope (Pydantic)
@@ -192,7 +191,11 @@ ignore = [
     "PT006",   # Wrong type for parametrize names
     "PT011",   # Pytest raises too broad
     "S101",    # Use of assert
+    "S104",    # Bind address 0.0.0.0 in configuration test data
+    "S105",    # Hardcoded password in tests (test data)
     "S106",    # Hardcoded password in tests (test data)
+    "S108",    # Fixed /tmp paths in test data
+    "S603",    # Subprocess with fixed arguments (run.sh and docker in tests)
     "S607",    # Partial executable path in subprocess (test fixtures)
     "SLF001",  # Private member access
     "T201",    # Print for debugging output

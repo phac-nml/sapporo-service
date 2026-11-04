@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,15 +43,15 @@ class TestGlobAllRunIds:
 
         assert glob_all_run_ids() == []
 
-    def test_ignores_dirs_without_run_request(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+    def test_ignores_dirs_without_state_file(self, mocker: "MockerFixture", tmp_path: Path) -> None:
         config = AppConfig(run_dir=tmp_path)
         mock_get_config(mocker, config)
 
-        # Create a directory structure that looks like a run but has no run_request.json
+        # Create a directory structure that looks like a run but has no state.txt
         fake_run_id = "aabbccdd-0000-0000-0000-000000000099"
         fake_dir = tmp_path / fake_run_id[:2] / fake_run_id
         fake_dir.mkdir(parents=True)
-        (fake_dir / "state.txt").write_text("COMPLETE", encoding="utf-8")
+        (fake_dir / "run_request.json").write_text("{}", encoding="utf-8")
 
         assert glob_all_run_ids() == []
 
@@ -252,3 +253,151 @@ class TestResolveContentPath:
         path = resolve_content_path(rid, "state")
         assert path.name == "state.txt"
         assert rid in str(path)
+
+
+# === read_state / read_file: run directories that cannot be parsed ===
+
+
+class TestReadBrokenRunDir:
+    def test_read_state_with_invalid_content_returns_unknown(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        config = AppConfig(run_dir=tmp_path)
+        mock_get_config(mocker, config)
+
+        rid = "aabbccdd-0000-0000-0000-0000000000e0"
+        create_run_dir(tmp_path, rid, state="NOT_A_STATE")
+
+        assert read_state(rid) == State.UNKNOWN
+
+    def test_read_state_with_empty_file_returns_unknown(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        config = AppConfig(run_dir=tmp_path)
+        mock_get_config(mocker, config)
+
+        rid = "aabbccdd-0000-0000-0000-0000000000e1"
+        create_run_dir(tmp_path, rid, state="")
+
+        assert read_state(rid) == State.UNKNOWN
+
+    def test_read_state_with_binary_content_returns_unknown(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        config = AppConfig(run_dir=tmp_path)
+        mock_get_config(mocker, config)
+
+        rid = "aabbccdd-0000-0000-0000-0000000000e2"
+        create_run_dir(tmp_path, rid)
+        tmp_path.joinpath(rid[:2], rid, RUN_DIR_STRUCTURE["state"]).write_bytes(b"\xff\xfe\x00")
+
+        assert read_state(rid) == State.UNKNOWN
+
+    def test_read_run_request_with_invalid_json_returns_none(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        config = AppConfig(run_dir=tmp_path)
+        mock_get_config(mocker, config)
+
+        rid = "aabbccdd-0000-0000-0000-0000000000e3"
+        create_run_dir(tmp_path, rid)
+        tmp_path.joinpath(rid[:2], rid, RUN_DIR_STRUCTURE["run_request"]).write_text("{not json", encoding="utf-8")
+
+        assert read_file(rid, "run_request") is None
+
+    def test_read_run_request_missing_required_fields_returns_none(
+        self, mocker: "MockerFixture", tmp_path: Path
+    ) -> None:
+        config = AppConfig(run_dir=tmp_path)
+        mock_get_config(mocker, config)
+
+        rid = "aabbccdd-0000-0000-0000-0000000000e4"
+        create_run_dir(tmp_path, rid)
+        tmp_path.joinpath(rid[:2], rid, RUN_DIR_STRUCTURE["run_request"]).write_text(
+            json.dumps({"workflow_type": "CWL"}), encoding="utf-8"
+        )
+
+        assert read_file(rid, "run_request") is None
+
+
+# === glob_all_run_ids: deleted runs ===
+
+
+class TestGlobAllRunIdsDeletedRuns:
+    def test_finds_run_that_keeps_only_state_file(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        config = AppConfig(run_dir=tmp_path)
+        mock_get_config(mocker, config)
+
+        rid = "aabbccdd-0000-0000-0000-0000000000e5"
+        rd = tmp_path.joinpath(rid[:2], rid)
+        rd.mkdir(parents=True)
+        rd.joinpath(RUN_DIR_STRUCTURE["state"]).write_text("DELETED", encoding="utf-8")
+
+        assert glob_all_run_ids() == [rid]
+
+
+# === read_file: engine output that is not clean UTF-8 or shell syntax ===
+
+
+class TestReadFileToleratesEngineOutput:
+    def test_stdout_with_invalid_utf8_is_read_with_replacement(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        config = AppConfig(run_dir=tmp_path)
+        mock_get_config(mocker, config)
+
+        rid = "aabbccdd-0000-0000-0000-0000000000e6"
+        create_run_dir(tmp_path, rid)
+        tmp_path.joinpath(rid[:2], rid, RUN_DIR_STRUCTURE["stdout"]).write_bytes(b"ok \xff\xfe end")
+
+        assert read_file(rid, "stdout") == "ok \ufffd\ufffd end"
+
+    def test_cmd_with_unbalanced_quote_falls_back_to_whitespace_split(
+        self, mocker: "MockerFixture", tmp_path: Path
+    ) -> None:
+        config = AppConfig(run_dir=tmp_path)
+        mock_get_config(mocker, config)
+
+        rid = "aabbccdd-0000-0000-0000-0000000000e7"
+        create_run_dir(tmp_path, rid, cmd="docker run --name it's wf.cwl")
+
+        assert read_file(rid, "cmd") == ["docker", "run", "--name", "it's", "wf.cwl"]
+
+
+class TestControlFileReplacedBySymlink:
+    def test_read_file_ignores_symlinked_log(
+        self, mocker: "MockerFixture", tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        mock_get_config(mocker, AppConfig(run_dir=tmp_path))
+        rid = "aabbccdd-0000-0000-0000-000000000090"
+        rd = create_run_dir(tmp_path, rid, stdout_content="real")
+        secret = tmp_path / "secret.txt"
+        secret.write_text("secret", encoding="utf-8")
+        log = rd / RUN_DIR_STRUCTURE["stdout"]
+        log.unlink()
+        log.symlink_to(secret)
+
+        with caplog.at_level(logging.WARNING, logger="sapporo.utils"):
+            assert read_file(rid, "stdout") is None
+
+        assert "stdout.log" in caplog.text
+
+    def test_read_state_reports_symlink_as_unknown(self, mocker: "MockerFixture", tmp_path: Path) -> None:
+        mock_get_config(mocker, AppConfig(run_dir=tmp_path))
+        rid = "aabbccdd-0000-0000-0000-000000000091"
+        rd = create_run_dir(tmp_path, rid, state="RUNNING")
+        other = tmp_path / "other.txt"
+        other.write_text("COMPLETE", encoding="utf-8")
+        state = rd / RUN_DIR_STRUCTURE["state"]
+        state.unlink()
+        state.symlink_to(other)
+
+        assert read_state(rid) == State.UNKNOWN
+
+    def test_write_file_replaces_symlinked_state_and_keeps_target(
+        self, mocker: "MockerFixture", tmp_path: Path
+    ) -> None:
+        mock_get_config(mocker, AppConfig(run_dir=tmp_path))
+        rid = "aabbccdd-0000-0000-0000-000000000092"
+        rd = create_run_dir(tmp_path, rid, state="RUNNING")
+        target = tmp_path / "target.txt"
+        target.write_text("original", encoding="utf-8")
+        state = rd / RUN_DIR_STRUCTURE["state"]
+        state.unlink()
+        state.symlink_to(target)
+
+        write_file(rid, "state", State.CANCELING)
+
+        assert not state.is_symlink()
+        assert read_state(rid) == State.CANCELING
+        assert target.read_text(encoding="utf-8") == "original"

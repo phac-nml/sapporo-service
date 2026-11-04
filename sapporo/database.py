@@ -19,7 +19,7 @@ import re
 import secrets
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import cache
 from typing import Any, Literal
 
@@ -31,7 +31,7 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 from sapporo.config import get_config
 from sapporo.exceptions import raise_bad_request
 from sapporo.factory import create_run_summary
-from sapporo.run_io import glob_all_run_ids, read_file
+from sapporo.run_io import glob_all_run_ids, read_file, read_state
 from sapporo.schemas import RunSummary, State
 from sapporo.utils import dt_to_time_str, time_str_to_dt
 
@@ -102,20 +102,47 @@ def db_runs_to_run_summaries(runs: list[Run]) -> list[RunSummary]:
 # === CRUD func ===
 
 
+def _run_summary_to_db_run(run_summary: RunSummary, username: str | None) -> Run:
+    """Convert a run summary into an index row.
+
+    The index orders runs by start_time, so a run without a parsable start_time cannot be indexed.
+    """
+    if not run_summary.start_time:
+        msg = f"start_time is missing: run_id={run_summary.run_id}"
+        raise ValueError(msg)
+
+    return Run(
+        run_id=run_summary.run_id,
+        username=username,
+        state=run_summary.state or State.UNKNOWN,
+        start_time=time_str_to_dt(run_summary.start_time),
+        end_time=time_str_to_dt(run_summary.end_time) if run_summary.end_time else None,
+        tags=json.dumps(run_summary.tags),
+    )
+
+
+def _db_run_from_disk(run_id: str) -> Run | None:
+    """Build an index row from a run directory.
+
+    Returns None and logs a warning when the run directory cannot be parsed, so that one broken run
+    does not stop the index from being built.
+    """
+    try:
+        run_summary = create_run_summary(run_id)
+        username: str | None = read_file(run_id, "username")
+        return _run_summary_to_db_run(run_summary, username)
+    except Exception as e:
+        LOGGER.warning("Skipping run that cannot be indexed: run_id=%s, error=%s", run_id, e)
+        return None
+
+
 def _full_rebuild(session: Session, disk_run_ids: set[str]) -> None:
     """Full rebuild: index all runs from disk."""
     count = 0
     for run_id in disk_run_ids:
-        run_summary = create_run_summary(run_id)
-        username: str | None = read_file(run_id, "username")
-        run = Run(
-            run_id=run_summary.run_id,
-            username=username,
-            state=run_summary.state,
-            start_time=run_summary.start_time and time_str_to_dt(run_summary.start_time),
-            end_time=run_summary.end_time and time_str_to_dt(run_summary.end_time),
-            tags=json.dumps(run_summary.tags),
-        )
+        run = _db_run_from_disk(run_id)
+        if run is None:
+            continue
         session.add(run)
         count += 1
     session.commit()
@@ -132,16 +159,9 @@ def _incremental_sync(session: Session, disk_run_ids: set[str]) -> None:
 
     added = 0
     for run_id in disk_run_ids - db_run_ids:
-        run_summary = create_run_summary(run_id)
-        username: str | None = read_file(run_id, "username")
-        run = Run(
-            run_id=run_summary.run_id,
-            username=username,
-            state=run_summary.state,
-            start_time=run_summary.start_time and time_str_to_dt(run_summary.start_time),
-            end_time=run_summary.end_time and time_str_to_dt(run_summary.end_time),
-            tags=json.dumps(run_summary.tags),
-        )
+        run = _db_run_from_disk(run_id)
+        if run is None:
+            continue
         session.add(run)
         added += 1
 
@@ -149,11 +169,19 @@ def _incremental_sync(session: Session, disk_run_ids: set[str]) -> None:
     for run_id, db_run in db_run_map.items():
         if run_id not in disk_run_ids:
             continue
-        if db_run.state in terminal_states:
+        # A terminal run only changes when it is deleted, so its full summary is read only when
+        # state.txt differs from the index
+        if db_run.state in terminal_states and read_state(run_id) == db_run.state:
             continue
-        run_summary = create_run_summary(run_id)
+        try:
+            run_summary = create_run_summary(run_id)
+            end_time = time_str_to_dt(run_summary.end_time) if run_summary.end_time else None
+        except Exception as e:
+            LOGGER.warning("Skipping run that cannot be synced: run_id=%s, error=%s", run_id, e)
+            continue
         db_run.state = run_summary.state or State.UNKNOWN
-        db_run.end_time = time_str_to_dt(run_summary.end_time) if run_summary.end_time else None
+        db_run.end_time = end_time
+        db_run.tags = json.dumps(run_summary.tags)
         session.add(db_run)
         updated += 1
 
@@ -191,6 +219,21 @@ def init_db() -> None:
             _incremental_sync(session, disk_run_ids)
 
 
+def sync_run_db(run_id: str) -> None:
+    """Refresh the index row of one run from its run directory.
+
+    Called after a run is deleted, so that the index shows DELETED before the next periodic sync.
+    """
+    engine = create_db_engine()
+    SQLModel.metadata.create_all(engine)
+    run = _db_run_from_disk(run_id)
+    if run is None:
+        return
+    with get_session() as session:
+        session.merge(run)
+        session.commit()
+
+
 def add_run_db(
     run_summary: RunSummary,
     username: str | None = None,
@@ -199,14 +242,7 @@ def add_run_db(
 
     Called at POST /runs. Since it is called after generating a uuid (run_id), id conflicts are unlikely to occur.
     """
-    run = Run(
-        run_id=run_summary.run_id,
-        username=username,
-        state=run_summary.state or State.UNKNOWN,
-        start_time=run_summary.start_time and time_str_to_dt(run_summary.start_time),
-        end_time=run_summary.end_time and time_str_to_dt(run_summary.end_time),
-        tags=json.dumps(run_summary.tags),
-    )
+    run = _run_summary_to_db_run(run_summary, username)
     with get_session() as session:
         session.add(run)
         session.commit()
@@ -305,7 +341,8 @@ def _build_filter_query(
             if key and value:
                 if not tag_key_pattern.match(key):
                     raise_bad_request(f"Invalid tag key: {key}")
-                query = query.where(func.json_extract(Run.tags, f"$.{key}") == value)
+                # The key is quoted so that a dot in it is not read as a JSON path separator
+                query = query.where(func.json_extract(Run.tags, f'$."{key}"') == value)
     return query
 
 
@@ -370,8 +407,8 @@ def list_old_runs_db(
     older_than_days: int,
 ) -> list[Run]:
     with get_session() as session:
-        cutoff_date = datetime.now(tz=timezone.utc) - timedelta(days=older_than_days)
-        query = select(Run).where(Run.start_time < cutoff_date)
+        cutoff_date = datetime.now(tz=UTC) - timedelta(days=older_than_days)
+        query = select(Run).where(Run.start_time < cutoff_date).where(Run.state != State.DELETED)
         results = session.exec(query).all()
 
     return list(results)

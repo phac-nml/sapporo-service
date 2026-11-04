@@ -16,13 +16,13 @@ from sapporo.auth import (
     MAX_JWT_EXPIRES_HOURS,
     SAPPORO_AUDIENCE,
     SAPPORO_SIGNATURE_ALGORITHM,
-    _is_insecure_idp_allowed,
     _mask_username,
     _validate_https_url,
     clear_external_auth_caches,
     external_decode_token,
     fetch_endpoint_metadata,
     fetch_jwks,
+    is_insecure_idp_allowed,
     sanitize_username,
     spr_check_user,
     spr_create_access_token,
@@ -186,8 +186,8 @@ def test_spr_create_access_token_default_expiry_is_24h(mocker: "MockerFixture", 
     )
     token = spr_create_access_token("test-user", _TEST_PASSWORD)
     decoded = pyjwt.decode(token, options={"verify_signature": False})
-    iat = datetime.datetime.fromtimestamp(decoded["iat"], tz=datetime.timezone.utc)
-    exp = datetime.datetime.fromtimestamp(decoded["exp"], tz=datetime.timezone.utc)
+    iat = datetime.datetime.fromtimestamp(decoded["iat"], tz=datetime.UTC)
+    exp = datetime.datetime.fromtimestamp(decoded["exp"], tz=datetime.UTC)
     delta_hours = (exp - iat).total_seconds() / 3600
     assert delta_hours == pytest.approx(DEFAULT_JWT_EXPIRES_HOURS, abs=0.01)
 
@@ -201,8 +201,8 @@ def test_spr_create_access_token_caps_at_max_hours(mocker: "MockerFixture", tmp_
     )
     token = spr_create_access_token("test-user", _TEST_PASSWORD)
     decoded = pyjwt.decode(token, options={"verify_signature": False})
-    iat = datetime.datetime.fromtimestamp(decoded["iat"], tz=datetime.timezone.utc)
-    exp = datetime.datetime.fromtimestamp(decoded["exp"], tz=datetime.timezone.utc)
+    iat = datetime.datetime.fromtimestamp(decoded["iat"], tz=datetime.UTC)
+    exp = datetime.datetime.fromtimestamp(decoded["exp"], tz=datetime.UTC)
     delta_hours = (exp - iat).total_seconds() / 3600
     assert delta_hours == pytest.approx(MAX_JWT_EXPIRES_HOURS, abs=0.01)
 
@@ -247,8 +247,8 @@ def test_spr_decode_token_with_expired_token_raises_401(mocker: "MockerFixture",
 
     expired_payload = {
         "sub": "test-user",
-        "exp": datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1),
-        "iat": datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25),
+        "exp": datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1),
+        "iat": datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=25),
         "aud": SAPPORO_AUDIENCE,
         "iss": "test",
     }
@@ -263,8 +263,8 @@ def test_spr_decode_token_with_wrong_signature_raises_401(mocker: "MockerFixture
 
     wrong_key_payload = {
         "sub": "test-user",
-        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
-        "iat": datetime.datetime.now(datetime.timezone.utc),
+        "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+        "iat": datetime.datetime.now(datetime.UTC),
         "aud": SAPPORO_AUDIENCE,
         "iss": "test",
     }
@@ -281,8 +281,8 @@ def test_spr_decode_token_with_wrong_audience_raises_401(mocker: "MockerFixture"
 
     wrong_aud_payload = {
         "sub": "test-user",
-        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
-        "iat": datetime.datetime.now(datetime.timezone.utc),
+        "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+        "iat": datetime.datetime.now(datetime.UTC),
         "aud": "wrong-audience",
         "iss": "test",
     }
@@ -292,7 +292,7 @@ def test_spr_decode_token_with_wrong_audience_raises_401(mocker: "MockerFixture"
     assert exc_info.value.status_code == 401
 
 
-# === _validate_https_url / _is_insecure_idp_allowed ===
+# === _validate_https_url / is_insecure_idp_allowed ===
 
 
 def test_validate_https_url_with_https_succeeds() -> None:
@@ -305,23 +305,23 @@ def test_validate_https_url_with_http_raises_400() -> None:
     assert exc_info.value.status_code == 400
 
 
-def test_is_insecure_idp_allowed_default_is_false() -> None:
-    assert not _is_insecure_idp_allowed()
+def testis_insecure_idp_allowed_default_is_false() -> None:
+    assert not is_insecure_idp_allowed()
 
 
-def test_is_insecure_idp_allowed_with_env_true() -> None:
+def testis_insecure_idp_allowed_with_env_true() -> None:
     os.environ["SAPPORO_ALLOW_INSECURE_IDP"] = "true"
-    assert _is_insecure_idp_allowed()
+    assert is_insecure_idp_allowed()
 
 
-def test_is_insecure_idp_allowed_with_env_one() -> None:
+def testis_insecure_idp_allowed_with_env_one() -> None:
     os.environ["SAPPORO_ALLOW_INSECURE_IDP"] = "1"
-    assert _is_insecure_idp_allowed()
+    assert is_insecure_idp_allowed()
 
 
-def test_is_insecure_idp_allowed_with_env_yes() -> None:
+def testis_insecure_idp_allowed_with_env_yes() -> None:
     os.environ["SAPPORO_ALLOW_INSECURE_IDP"] = "yes"
-    assert _is_insecure_idp_allowed()
+    assert is_insecure_idp_allowed()
 
 
 def test_validate_https_url_with_insecure_allowed_accepts_http() -> None:
@@ -644,7 +644,7 @@ async def test_external_decode_token_with_hs256_raises_401(
             "sub": "test-user",
             "iss": _MOCK_IDP_ISSUER,
             "aud": "account",
-            "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
+            "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         },
         "secret",
         algorithm="HS256",
@@ -691,7 +691,7 @@ async def test_external_decode_token_without_kid_raises_401(
             "sub": "test-user",
             "iss": _MOCK_IDP_ISSUER,
             "aud": "account",
-            "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1),
+            "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         },
         priv,
         algorithm="RS256",
@@ -846,3 +846,52 @@ async def test_external_decode_token_invalid_signature_raises_401(
     ):
         await external_decode_token(token)
     assert exc_info.value.status_code == 401
+
+
+# === list audience / dummy hash ===
+
+
+def test_token_payload_accepts_list_audience() -> None:
+    from sapporo.auth import TokenPayload
+
+    payload = TokenPayload.model_validate({"sub": "u", "exp": None, "iat": None, "aud": ["account", "x"], "iss": "i"})
+
+    assert payload.aud == ["account", "x"]
+
+
+@pytest.mark.asyncio
+async def test_external_decode_token_with_list_audience_succeeds(
+    mocker: "MockerFixture", tmp_path: Path, rsa_keypair: tuple[Any, Any]
+) -> None:
+    _setup_external_auth(mocker, tmp_path)
+    from sapporo.auth import get_auth_config
+
+    priv, pub = rsa_keypair
+    jwks = build_jwks_dict(pub)
+    now = datetime.datetime.now(datetime.UTC)
+    claims = {
+        "sub": "multi-aud-user",
+        "iss": _MOCK_IDP_METADATA["issuer"],
+        "aud": [get_auth_config().external_config.jwt_audience, "another-client"],
+        "iat": now,
+        "exp": now + datetime.timedelta(hours=1),
+    }
+    token = pyjwt.encode(claims, priv, algorithm="RS256", headers={"kid": "test-kid-1"})
+
+    with (
+        patch("sapporo.auth._fetch_once", side_effect=_mock_fetch_once(_MOCK_IDP_METADATA, jwks)),
+        patch("sapporo.auth.asyncio.sleep"),
+    ):
+        payload = await external_decode_token(token)
+
+    assert payload.sub == "multi-aud-user"
+
+
+def test_dummy_password_hash_is_a_real_argon2_hash() -> None:
+    from argon2 import PasswordHasher
+    from argon2.exceptions import VerifyMismatchError
+
+    from sapporo.auth import _DUMMY_PASSWORD_HASH
+
+    with pytest.raises(VerifyMismatchError):
+        PasswordHasher().verify(_DUMMY_PASSWORD_HASH, "not the password")

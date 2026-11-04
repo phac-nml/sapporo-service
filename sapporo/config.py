@@ -47,7 +47,8 @@ SAPPORO_WES_SPEC_VERSION = "2.1.0"
 
 
 def _default_host() -> str:
-    return "0.0.0.0" if inside_docker() else "127.0.0.1"
+    # Inside a container the port is reachable only where the container publishes it
+    return "0.0.0.0" if inside_docker() else "127.0.0.1"  # noqa: S104
 
 
 def _pkg_path(name: str) -> Path:
@@ -81,12 +82,23 @@ class AppConfig(BaseSettings):
     auth_config: Path = Field(default_factory=lambda: _pkg_path("auth_config.json"))
     run_remove_older_than_days: int | None = Field(default=None)
     snapshot_interval: int = Field(default=30)
+    cancel_grace_seconds: int = Field(default=30)
 
     @field_validator("snapshot_interval")
     @classmethod
     def _validate_snapshot_interval(cls, v: int) -> int:
         if v < 1:
             msg = "The value of --snapshot-interval (SAPPORO_SNAPSHOT_INTERVAL) must be greater than or equal to 1."
+            raise ValueError(msg)
+        return v
+
+    @field_validator("cancel_grace_seconds")
+    @classmethod
+    def _validate_cancel_grace_seconds(cls, v: int) -> int:
+        if v < 0:
+            msg = (
+                "The value of --cancel-grace-seconds (SAPPORO_CANCEL_GRACE_SECONDS) must be greater than or equal to 0."
+            )
             raise ValueError(msg)
         return v
 

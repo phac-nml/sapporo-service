@@ -1171,6 +1171,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: ListExecutableWorkflows
+      tags:
+      - sapporo Extension
   /me:
     get:
       description: '**sapporo-wes-2.1.0 extension:**
@@ -1225,6 +1227,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: GetCurrentUser
+      tags:
+      - Authentication
   /runs:
     delete:
       description: '**sapporo-wes-2.1.0 extension:**
@@ -1291,6 +1295,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: DeleteRuns
+      tags:
+      - sapporo Extension
     get:
       description: 'This list should be provided in a stable ordering. (The actual
         ordering is implementation dependent.) When paging through the list, the client
@@ -1329,6 +1335,8 @@ paths:
             `page_size` items are returned that all items have been returned.  The
             availability of additional pages is indicated by the value of `next_page_token`
             in the response.
+          maximum: 1000
+          minimum: 1
           title: Page Size
           type: integer
       - description: OPTIONAL Token to use to indicate where to start getting results.
@@ -1454,6 +1462,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: ListRuns
+      tags:
+      - GA4GH WES
     post:
       description: 'This endpoint creates a new workflow run and returns a `RunId`
         to monitor its progress.
@@ -1501,7 +1511,11 @@ paths:
 
         - `workflow_type_version` and `workflow_url` are now required.
 
-        - Supports `application/json` request body in addition to `multipart/form-data`.'
+        - Supports `application/json` request body in addition to `multipart/form-data`.
+
+        - When `executable_workflows.json` lists workflows, `workflow_engine_parameters`
+        is rejected with 400 and the `default_workflow_engine_parameters` of the service
+        are used.'
       operationId: run_workflow_runs_post
       requestBody:
         content:
@@ -1615,6 +1629,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: RunWorkflow
+      tags:
+      - GA4GH WES
   /runs/{run_id}:
     delete:
       description: '**sapporo-wes-2.1.0 extension:**
@@ -1624,9 +1640,10 @@ paths:
         If the run is in progress, it will be canceled first.
 
         Then, the run directory contents will be deleted, but `state.txt`, `start_time.txt`,
-        and `end_time.txt` will not be deleted.
+        `end_time.txt`, and `username.txt` will not be deleted.
 
-        This is because the information that the run has been deleted should be retained.'
+        This is because the information that the run has been deleted should be retained:
+        the run stays listed with state `DELETED`.'
       operationId: delete_run_runs__run_id__delete
       parameters:
       - in: path
@@ -1679,6 +1696,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: DeleteRun
+      tags:
+      - sapporo Extension
     get:
       description: 'This endpoint provides detailed information about a given workflow
         run. The returned result has information about the outputs produced by this
@@ -1744,6 +1763,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: GetRunLog
+      tags:
+      - GA4GH WES
   /runs/{run_id}/cancel:
     post:
       description: Cancel a running workflow.
@@ -1799,6 +1820,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: CancelRun
+      tags:
+      - GA4GH WES
   /runs/{run_id}/outputs:
     get:
       description: '**sapporo-wes-2.1.0 extension:** List the output files of a run.
@@ -1887,10 +1910,13 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: ListRunOutputs
+      tags:
+      - sapporo Extension
   /runs/{run_id}/outputs/{path}:
     get:
       description: '**sapporo-wes-2.1.0 extension:** Download a specific output file
-        from a run.'
+        from a run. The path is taken as it is listed in `GET /runs/{run_id}/outputs`.
+        A symlink is followed only when its target is inside the run directory.'
       operationId: get_run_outputs_runs__run_id__outputs__path__get
       parameters:
       - in: path
@@ -1952,6 +1978,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: DownloadRunOutput
+      tags:
+      - sapporo Extension
   /runs/{run_id}/ro-crate:
     get:
       description: '**sapporo-wes-2.1.0 extension:** Get the RO-Crate metadata (ro-crate-metadata.json)
@@ -2024,6 +2052,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: DownloadRO-Crate
+      tags:
+      - sapporo Extension
   /runs/{run_id}/status:
     get:
       description: 'This provides an abbreviated (and likely fast depending on implementation)
@@ -2088,6 +2118,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: GetRunStatus
+      tags:
+      - GA4GH WES
   /runs/{run_id}/tasks:
     get:
       description: 'This endpoint provides a paginated list of tasks that were executed
@@ -2184,6 +2216,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: ListTasks
+      tags:
+      - GA4GH WES
   /runs/{run_id}/tasks/{task_id}:
     get:
       description: 'This endpoint provides a mechanism to retrieve information on
@@ -2252,6 +2286,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: GetTask
+      tags:
+      - GA4GH WES
   /service-info:
     get:
       description: 'May include information related (but not limited to) the workflow
@@ -2306,6 +2342,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: GetServiceInfo
+      tags:
+      - GA4GH WES
   /token:
     post:
       description: "**sapporo-wes-2.1.0 extension:**\n\nAuthenticate user and create\
@@ -2313,11 +2351,12 @@ paths:
         - **Sapporo IdP mode**: Authenticates against local user credentials defined\
         \ in `auth_config.json`.\n  Passwords are verified using Argon2 hash comparison.\n\
         - **External IdP mode (confidential client)**: Forwards credentials to the\
-        \ external IdP's token endpoint.\n\nThe returned JWT token should be included\
-        \ in subsequent requests using the `Authorization: Bearer <token>` header.\n\
-        \n**Security notes:**\n- Tokens have a configurable expiration time (default:\
-        \ 24 hours, max: 168 hours)\n- All tokens include `iat` (issued at) and `exp`\
-        \ (expiration) claims\n- Passwords are never logged or stored in plaintext"
+        \ external IdP's token endpoint.\n\nWhen authentication is disabled, this\
+        \ endpoint returns 400.\n\nThe returned JWT token should be included in subsequent\
+        \ requests using the `Authorization: Bearer <token>` header.\n\n**Security\
+        \ notes:**\n- Tokens have a configurable expiration time (default: 24 hours,\
+        \ max: 168 hours)\n- All tokens include `iat` (issued at) and `exp` (expiration)\
+        \ claims\n- Passwords are never logged or stored in plaintext"
       operationId: create_token_token_post
       requestBody:
         content:
@@ -2368,5 +2407,17 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: An unexpected error occurred.
       summary: CreateToken
+      tags:
+      - Authentication
 servers:
 - url: http://127.0.0.1:1122
+tags:
+- description: Endpoints defined in the GA4GH WES 1.1.0 specification.
+  externalDocs:
+    description: GA4GH WES 1.1.0
+    url: https://ga4gh.github.io/workflow-execution-service-schemas/docs/
+  name: GA4GH WES
+- description: Additional endpoints provided by sapporo-wes-2.1.0.
+  name: sapporo Extension
+- description: Token management and user information endpoints.
+  name: Authentication

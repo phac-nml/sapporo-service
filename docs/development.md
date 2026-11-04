@@ -13,7 +13,8 @@ docker compose -f compose.dev.yml exec app bash
 
 The development compose file:
 
-- Builds from the local Dockerfile
+- Builds the `dev` target of the local Dockerfile, which adds the `tests` extra and the `dev` dependency group to the runtime dependencies. The default target is the image that CI publishes, and it contains only the runtime dependencies
+- Pulls the base images on each build. The Dockerfile names each base image by a tag that the registry rebuilds with security updates (for example `python:3.14-slim-trixie` and `docker:29-cli`), so do not pin a patch version or a digest
 - Mounts the source tree at `/app`
 - Uses a named volume for `.venv` (avoids host/container venv conflicts)
 - Runs `sleep infinity` so you can exec into the container and start the service manually
@@ -102,7 +103,10 @@ workflow engine:
 | `test_cromwell.py` | cromwell | WDL |
 | `test_nextflow.py` | nextflow | NFL |
 | `test_snakemake.py` | snakemake | SMK |
+| `test_streamflow.py` | streamflow | CWL |
 | `test_ro_crate.py` | all of the above | (multi-engine RO-Crate validation) |
+
+`test_cancel.py` covers cancellation, including that every engine with Docker socket access stops its step containers. `test_delete.py`, `test_auth.py` and `test_auth_external.py` cover deletion and authentication with cwltool.
 
 Run integration tests inside the development container:
 
@@ -164,13 +168,27 @@ To bump the spec version:
 2. Regenerate the spec: `uv run sapporo-cli generate-openapi`
 3. Rename the output file if the major/minor version changed
 
+## Continuous Integration
+
+GitHub Actions runs the following workflows (`.github/workflows/`):
+
+| Workflow | Trigger | What it runs |
+|---|---|---|
+| `lint` | push to `main`, pull requests | ruff check, ruff format check, mypy on Python 3.11 to 3.14 |
+| `pytest` | push to `main`, pull requests | unit tests on Python 3.11 to 3.14; mutation tests on manual dispatch |
+| `latest-deps` | weekly, manual dispatch | `uv lock --upgrade`, then ruff, mypy and pytest against the newest versions allowed by `pyproject.toml` |
+| `docs` | push to `main` | mkdocs build and deploy to GitHub Pages |
+| `release` | tag push | PyPI publish, Docker image push, GitHub Release |
+
+`lint` and `pytest` install from `uv.lock` (`uv sync --locked`), so they test the same versions that the Docker image gets. `latest-deps` ignores the lock, so it catches an upstream change (for example a removed import) before it reaches `pip install sapporo` users. To update `uv.lock`, run `uv lock --upgrade` and open a pull request.
+
 ## Release Process
 
 ### Version Management
 
 - The git tag is the single source of truth for the package version (`hatch-vcs`)
 - At runtime, the version is obtained via `importlib.metadata.version("sapporo")`
-- Docker image version is injected by CI from the tag name with `--build-arg VERSION=...` and `SETUPTOOLS_SCM_PRETEND_VERSION`
+- Docker image version is injected by CI from the tag name with `--build-arg VERSION=...`; the Dockerfile passes it to hatch-vcs through `SETUPTOOLS_SCM_PRETEND_VERSION`
 
 ### Release Steps
 
@@ -185,7 +203,7 @@ To bump the spec version:
 
 3. The tag push triggers `release.yml` automatically:
    - Publish PyPI package (Trusted Publishing)
-   - Build and push multi-architecture Docker image (ghcr.io)
+   - Build and push multi-architecture Docker image (ghcr.io) with the newest base images
    - Create GitHub Release (auto-generated release notes)
 
 ### Differences from 1.x
@@ -197,4 +215,4 @@ To bump the spec version:
 - Organized Python and Docker toolchain
 - Simplified `executable_workflows.json` to a list of `workflow_url`s
 - Full support for automatic run directory cleanup
-- See the [sapporo-wes-2.0.0 specification](https://github.com/sapporo-wes/sapporo-service/blob/main/sapporo-wes-spec-2.0.0.yml) for detailed API changes
+- See the [sapporo-wes-2.0.0 specification](https://github.com/sapporo-wes/sapporo-service/blob/main/openapi/sapporo-wes-spec-2.0.0.yml) for detailed API changes

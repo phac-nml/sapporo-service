@@ -4,7 +4,7 @@
 
 Requirements:
 
-- Python 3.10 or later
+- Python 3.11 or later
 - Docker (for running workflow engines)
 
 Install from PyPI:
@@ -38,8 +38,8 @@ See [Configuration](configuration.md) for CLI options and environment variables.
 The official Docker image is published at `ghcr.io/sapporo-wes/sapporo-service`. Multi-architecture images (amd64/arm64) are built by CI on each release.
 
 ```bash
-# Specific version
-docker pull ghcr.io/sapporo-wes/sapporo-service:2.1.0
+# Specific version (the tag is the release number, for example 2.2.6)
+docker pull ghcr.io/sapporo-wes/sapporo-service:<version>
 
 # Latest
 docker pull ghcr.io/sapporo-wes/sapporo-service:latest
@@ -56,6 +56,11 @@ docker compose up -d
 The `compose.yml` in the repository:
 
 ```yaml
+# Sapporo spawns sub-containers via Docker socket (DinD).
+# Sub-container volume mounts are resolved on the HOST, not inside this container.
+# Therefore, SAPPORO_RUN_DIR uses ${PWD} (host absolute path) and mounts
+# host-path:host-path so that paths are identical on both sides.
+
 services:
   app:
     image: ghcr.io/sapporo-wes/sapporo-service:${SAPPORO_VERSION:-latest}
@@ -65,6 +70,10 @@ services:
       - SAPPORO_PORT=1122
       - SAPPORO_DEBUG=False
       - SAPPORO_RUN_DIR=${PWD}/runs
+      # Optional: pass extra docker run flags to inner workflow containers.
+      # Use this to mount data directories that workflows need to read.
+      # Example: SAPPORO_EXTRA_DOCKER_ARGS=-v /data:/data
+      # - SAPPORO_EXTRA_DOCKER_ARGS=
     volumes:
       - ${PWD}/runs:${PWD}/runs:rw
       - /var/run/docker.sock:/var/run/docker.sock
@@ -78,13 +87,14 @@ services:
 
 networks:
   sapporo-network:
+    name: sapporo-network
 ```
 
 ### Volume Mounts (Docker-in-Docker)
 
 The sapporo-service does not install workflow engines directly. Instead, it runs each workflow engine inside a Docker container, communicating through the host's Docker socket (`/var/run/docker.sock`). This is called Docker-in-Docker (DinD), though technically the service spawns sibling containers (not nested ones) on the host Docker daemon.
 
-The key constraint is that **volume mount paths must be identical between the host and the sapporo container**. When a workflow engine container mounts `${run_dir}:${run_dir}`, Docker resolves that path on the host filesystem. If the sapporo container used a different internal path, the workflow engine container would mount an empty or nonexistent directory.
+The key constraint is that **volume mount paths must be identical between the host and the sapporo container**. When a workflow engine container mounts a directory of a run, such as `${exe_dir}:${exe_dir}`, Docker resolves that path on the host filesystem. If the sapporo container used a different internal path, the workflow engine container would mount an empty or nonexistent directory.
 
 This is why `compose.yml` uses `${PWD}/runs:${PWD}/runs` -- the host absolute path is passed through as-is, ensuring that both the sapporo container and any spawned workflow engine containers see the same files at the same paths. The three required mounts are:
 
