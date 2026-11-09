@@ -7,8 +7,6 @@
 }:
 
 {
-  name = "Sapporo Service";
-
   env.PYTHONPYCACHEPREFIX=".pycache";  # Put bytecode files in a single folder
   process.proxy.enable = true;
 
