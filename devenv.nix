@@ -41,6 +41,15 @@
 
   outputs = {
     sapporo-service = config.languages.python.import ./. {};
+    run-irida-next = pkgs.stdenv.mkDerivation {
+      name = "run-irida-next";
+      src = ./.;
+      installPhase = ''
+        mkdir -p $out/bin
+        cp sapporo/run_irida_next.sh $out/bin/run.sh
+        chmod +x $out/bin/run.sh
+      '';
+    };
   };
 
   # https://devenv.sh/processes/
@@ -51,7 +60,7 @@
     env.SAPPORO_HOST = "0.0.0.0";
     env.SAPPORO_PORT = builtins.toString config.processes.sapporo.ports.http.value;
     env.SAPPORO_DEBUG = "True";
-    env.SAPPORO_RUN_SH = "${config.git.root}/sapporo-service/sapporo/run_irida_next.sh";
+    env.SAPPORO_RUN_SH = "${config.outputs.run-irida-next}/bin/run.sh";
     env.SAPPORO_RUN_DIR = "${config.devenv.state}/sapporo-runs";
   };
 
