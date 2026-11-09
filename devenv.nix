@@ -54,7 +54,7 @@
     env.SAPPORO_HOST = "0.0.0.0";
     env.SAPPORO_PORT = builtins.toString config.processes.sapporo.ports.http.value;
     env.SAPPORO_DEBUG = "True";
-    env.SAPPORO_RUN_SH = "sapporo-service/sapporo/run_irida_next.sh";
+    env.SAPPORO_RUN_SH = "${config.git.root}/sapporo-service/sapporo/run_irida_next.sh";
     env.SAPPORO_RUN_DIR = "${config.devenv.state}/sapporo-runs";
   };
 
@@ -63,7 +63,7 @@
 
   # https://devenv.sh/basics/
   enterShell = ''
-    uv sync
+    uv sync --directory ${config.git.root}
   '';
 
   # https://devenv.sh/tasks/
