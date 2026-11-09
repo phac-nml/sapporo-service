@@ -36,6 +36,7 @@
 
   # https://devenv.sh/languages/
   languages.python = {
+    directory = "${config.git.root}";
     enable = true;
     venv.enable = true;
     version = "3.14";
