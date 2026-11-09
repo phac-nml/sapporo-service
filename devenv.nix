@@ -36,15 +36,13 @@
 
   # https://devenv.sh/languages/
   languages.python = {
-    directory = "${config.git.root}";
     enable = true;
-    venv.enable = true;
     version = "3.14";
+    uv.enable = true;
   };
-  languages.python.uv = {
-    enable = true;
-    sync.enable = true;
-    sync.allExtras = true; # Sync dev dependencies
+
+  outputs = {
+    sapporo-service = config.languages.python.import ./sapporo {};
   };
 
   # https://devenv.sh/processes/
@@ -63,9 +61,9 @@
   # services.postgres.enable = true;
 
   # https://devenv.sh/basics/
-  enterShell = ''
-    uv sync --directory ${config.git.root}
-  '';
+  #enterShell = ''
+  #  uv sync --directory ${config.git.root}
+  #'';
 
   # https://devenv.sh/tasks/
   tasks."sapporo:setup-data" = {
@@ -78,10 +76,10 @@
   };
 
   # https://devenv.sh/tests/
-  enterTest = ''
-    echo "Running tests"
-    uv run pytest
-  '';
+  #enterTest = ''
+  #  echo "Running tests"
+  #  uv run pytest
+  #'';
 
   # See full reference at https://devenv.sh/reference/options/
 }
