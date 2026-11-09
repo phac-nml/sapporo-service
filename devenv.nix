@@ -7,7 +7,7 @@
 }:
 
 {
-  env.PYTHONPYCACHEPREFIX=".pycache";  # Put bytecode files in a single folder
+  env.PYTHONPYCACHEPREFIX="${config.devenv.state}/.pycache";  # Put bytecode files in a single folder
   process.proxy.enable = true;
 
   overlays = [
