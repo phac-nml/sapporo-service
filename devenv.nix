@@ -42,12 +42,12 @@
   };
 
   outputs = {
-    sapporo-service = config.languages.python.import ./sapporo {};
+    sapporo-service = config.languages.python.import ./. {};
   };
 
   # https://devenv.sh/processes/
   processes.sapporo = {
-    exec = "uv run sapporo";
+    exec = "${config.outputs.sapporo-service}/bin/sapporo";
     ports.http.allocate = 1122;
     env.SKIP_CHOWN_OUTPUTS = "True";
     env.SAPPORO_HOST = "0.0.0.0";
