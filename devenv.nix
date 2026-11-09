@@ -7,7 +7,7 @@
 }:
 
 {
-  env.PYTHONPYCACHEPREFIX="${config.devenv.state}/.pycache";  # Put bytecode files in a single folder
+  env.PYTHONPYCACHEPREFIX = "${config.devenv.state}/.pycache";  # Put bytecode files in a single folder
   process.proxy.enable = true;
 
   overlays = [
@@ -56,6 +56,7 @@
   processes.sapporo = {
     exec = "${config.outputs.sapporo-service}/bin/sapporo";
     ports.http.allocate = 1122;
+    env.PYTHONPATH = "${config.outputs.sapporo-service}/src:${config.outputs.sapporo-service}/lib";
     env.SKIP_CHOWN_OUTPUTS = "True";
     env.SAPPORO_HOST = "0.0.0.0";
     env.SAPPORO_PORT = builtins.toString config.processes.sapporo.ports.http.value;
