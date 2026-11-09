@@ -7,9 +7,6 @@
 }:
 
 {
-  env.PYTHONPYCACHEPREFIX = "${config.devenv.state}/.pycache";  # Put bytecode files in a single folder
-  process.proxy.enable = true;
-
   overlays = [
     (final: prev: {
       nextflow = inputs.nextflow-pin.legacyPackages.${prev.system}.nextflow.overrideAttrs (oldAttrs: {
@@ -56,7 +53,7 @@
   processes.sapporo = {
     exec = "${config.outputs.sapporo-service}/bin/sapporo";
     ports.http.allocate = 1122;
-    env.PYTHONPATH = "${config.outputs.sapporo-service}/src:${config.outputs.sapporo-service}/lib";
+    env.PYTHONPATH = "${config.outputs.sapporo-service}/${config.languages.python.package.sitePackages}";
     env.SKIP_CHOWN_OUTPUTS = "True";
     env.SAPPORO_HOST = "0.0.0.0";
     env.SAPPORO_PORT = builtins.toString config.processes.sapporo.ports.http.value;
@@ -64,14 +61,6 @@
     env.SAPPORO_RUN_SH = "${config.outputs.run-irida-next}/bin/run.sh";
     env.SAPPORO_RUN_DIR = "${config.devenv.state}/sapporo-runs";
   };
-
-  # https://devenv.sh/services/
-  # services.postgres.enable = true;
-
-  # https://devenv.sh/basics/
-  #enterShell = ''
-  #  uv sync --directory ${config.git.root}
-  #'';
 
   # https://devenv.sh/tasks/
   tasks."sapporo:setup-data" = {
@@ -82,12 +71,6 @@
     cwd = "${config.devenv.state}";
     before = [ "devenv:processes:sapporo" ];
   };
-
-  # https://devenv.sh/tests/
-  #enterTest = ''
-  #  echo "Running tests"
-  #  uv run pytest
-  #'';
 
   # See full reference at https://devenv.sh/reference/options/
 }
